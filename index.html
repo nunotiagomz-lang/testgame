@@ -103,14 +103,56 @@ function tone(f1, f2, dur, type = 'square', vol = .07, delay = 0) {
     o.start(t); o.stop(t + dur + .02);
   } catch (e) {}
 }
+// ruído filtrado com varrimento de frequência (para "swash", "pow", etc.)
+let sfxNoise = null;
+function whoosh(f1, f2, f3, dur, vol, delay = 0, q = 1.2) {
+  if (muted || !actx) return;
+  try {
+    if (!sfxNoise) {
+      sfxNoise = actx.createBuffer(1, actx.sampleRate, actx.sampleRate);
+      const d = sfxNoise.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    }
+    const t = actx.currentTime + delay;
+    const s = actx.createBufferSource(), f = actx.createBiquadFilter(), g = actx.createGain();
+    s.buffer = sfxNoise; f.type = 'bandpass'; f.Q.value = q;
+    f.frequency.setValueAtTime(f1, t);
+    f.frequency.exponentialRampToValueAtTime(f2, t + dur * .45);
+    f.frequency.exponentialRampToValueAtTime(f3, t + dur);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + dur * .35);
+    g.gain.exponentialRampToValueAtTime(0.0008, t + dur);
+    s.connect(f).connect(g).connect(actx.destination);
+    s.start(t); s.stop(t + dur + .02);
+  } catch (e) {}
+}
 const sfx = {
-  jump: () => tone(380, 820, .16, 'square', .05),
-  duck: () => tone(320, 160, .1, 'triangle', .08),
-  spin: () => { tone(180, 1000, .35, 'sawtooth', .035); tone(260, 1200, .35, 'triangle', .05, .03); },
+  // "twin!" — mola a subir
+  jump: () => { tone(420, 1250, .13, 'triangle', .13); tone(840, 2500, .1, 'sine', .04, .02); },
+  // "fiu" — escorregar para baixo
+  duck: () => { tone(1000, 300, .16, 'sine', .09); whoosh(2500, 900, 500, .16, .05); },
+  // cair depressa no ar
+  dive: () => { tone(1400, 260, .2, 'sine', .07); },
+  // aterrar — "tum" suave
+  land: () => { tone(160, 60, .09, 'sine', .14); whoosh(500, 300, 200, .07, .05); },
+  // "swash!" — remoinho a girar
+  spin: () => { whoosh(350, 3200, 700, .42, .32, 0, 1.6); tone(500, 1500, .35, 'sine', .035, .02); },
   bark: () => { tone(620, 300, .07, 'square', .05); tone(680, 320, .07, 'square', .05, .11); },
-  hit: () => { tone(900, 1700, .12, 'triangle', .1); tone(1200, 2200, .1, 'square', .04, .08); },
-  die: () => { tone(520, 70, .7, 'sawtooth', .08); },
-  milestone: () => { tone(660, 660, .08, 'square', .04); tone(880, 880, .12, 'square', .04, .09); }
+  growl: () => { tone(140, 110, .25, 'sawtooth', .05); },
+  // "pow!" + o outro cão a ganir
+  hit: () => {
+    whoosh(1800, 900, 300, .14, .4, 0, .8); tone(300, 80, .14, 'square', .1);
+    tone(1300, 1700, .08, 'sine', .08, .1); tone(1700, 900, .2, 'sine', .07, .18);
+  },
+  // passou um obstáculo — "plim"
+  pass: () => { tone(1568, 1568, .07, 'sine', .045); tone(2093, 2093, .1, 'sine', .035, .05); },
+  // "uá uá uá uáaa" triste
+  die: () => {
+    tone(520, 60, .25, 'square', .05);
+    [392, 370, 349, 330].forEach((f, i) => tone(f, i === 3 ? f * .85 : f * .97, i === 3 ? .6 : .22, 'triangle', .12, .3 + i * .24));
+  },
+  start: () => { [523, 659, 784, 1047].forEach((f, i) => tone(f, f, .12, 'triangle', .1, i * .08)); },
+  milestone: () => { [784, 988, 1175, 1568].forEach((f, i) => tone(f, f, .1, 'square', .035, i * .06)); }
 };
 
 /* ---------------- Música de fundo ----------------
@@ -591,7 +633,7 @@ function reset() {
   score = 0; elapsed = 0; speed = BASE_SPEED; gapLeft = 650; obstacles = []; particles = []; popups = [];
   nextMilestone = 500; hitsCount = 0; deathT = 0;
 }
-function start() { reset(); state = 'play'; musicStart(); }
+function start() { reset(); state = 'play'; musicStart(); sfx.start(); }
 
 const ducking = () => P.onGround && (P.duckHeld || P.duckT > 0) && P.spinT <= 0;
 
@@ -603,7 +645,7 @@ function doJump() {
 }
 function doDuck() {
   P.duckT = DUCK_MIN;
-  if (!P.onGround) P.vy = Math.max(P.vy, 1100);
+  if (!P.onGround) { P.vy = Math.max(P.vy, 1100); sfx.dive(); }
   else sfx.duck();
 }
 function doSpin() {
@@ -717,7 +759,7 @@ function update(dt) {
     P.vy += GRAV * dt * (P.spinT > 0 ? .55 : 1);
     P.y += P.vy * dt;
     if (P.y >= GROUND) {
-      P.y = GROUND; P.vy = 0; P.onGround = true;
+      P.y = GROUND; P.vy = 0; P.onGround = true; sfx.land();
       for (let i = 0; i < 5; i++) particles.push({ x: P.x + rnd(10, 90), y: GROUND, vx: rnd(-150, 50), vy: rnd(-90, -20), life: .35, max: .35, c: 'rgba(170,150,120,', s: rnd(3, 5) });
       if (P.jumpBuf > 0) { P.jumpBuf = 0; doJump(); }
     }
@@ -738,7 +780,7 @@ function update(dt) {
       if (!o.barked && o.x < W - 40) { o.barked = true; sfx.bark(); popup(o.x + 40, o.y - 70, 'AU AU!', '#fff'); }
       // salta para morder se o salsicha estiver no ar
       const dx = o.x - (P.x + 96);
-      if (o.onGround && !o.leapt && !P.onGround && dx > 0 && dx < 170) { o.vy = -880; o.onGround = false; o.leapt = true; }
+      if (o.onGround && !o.leapt && !P.onGround && dx > 0 && dx < 170) { o.vy = -880; o.onGround = false; o.leapt = true; sfx.growl(); }
       if (!o.onGround) { o.vy += GRAV * dt; o.y += o.vy * dt; if (o.y >= GROUND) { o.y = GROUND; o.vy = 0; o.onGround = true; } }
       // bater (girar)
       if (P.spinT > 0) {
@@ -753,7 +795,10 @@ function update(dt) {
           continue;
         }
       }
-    } else o.x -= speed * dt;
+    } else {
+      o.x -= speed * dt;
+      if (!o.passed && o.x + o.w < P.x) { o.passed = true; sfx.pass(); }
+    }
     if (overlap(pb, boxOf(o))) { die(o); break; }
   }
   obstacles = obstacles.filter(o => o.type === 'dog'
