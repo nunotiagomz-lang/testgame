@@ -23,19 +23,19 @@
   #bJump{background:#2a9d8f}
   #bDuck{background:#e9a23b}
   #bSpin{background:#d64550}
-  #mute{position:fixed;top:10px;right:10px;width:40px;height:40px;border-radius:50%;border:none;
-    background:rgba(0,0,0,.35);color:#fff;font-size:18px;cursor:pointer;z-index:5}
-  @media (max-width:520px){ .btn{height:64px;font-size:15px} .btn span{font-size:22px} .btn small{display:none} }
+  #mute{flex:0 0 56px;height:74px;border-radius:20px;border:none;background:rgba(255,255,255,.14);
+    color:#fff;font-size:22px;cursor:pointer;box-shadow:0 6px 0 rgba(0,0,0,.35)}
+  @media (max-width:520px){ #mute{height:64px;flex-basis:44px} .btn{height:64px;font-size:15px} .btn span{font-size:22px} .btn small{display:none} }
 </style>
 </head>
 <body>
-<button id="mute" aria-label="Som">🔊</button>
 <div id="wrap">
   <canvas id="game"></canvas>
   <div id="controls">
     <button class="btn" id="bJump"><span>⬆</span>SALTAR<small>Espaço / ↑</small></button>
     <button class="btn" id="bDuck"><span>⬇</span>BAIXAR<small>↓</small></button>
     <button class="btn" id="bSpin"><span>🌀</span>BATER<small>X</small></button>
+    <button id="mute" aria-label="Som">🔊</button>
   </div>
 </div>
 <script>
@@ -152,6 +152,9 @@ const sfx = {
     [392, 370, 349, 330].forEach((f, i) => tone(f, i === 3 ? f * .85 : f * .97, i === 3 ? .6 : .22, 'triangle', .12, .3 + i * .24));
   },
   start: () => { [523, 659, 784, 1047].forEach((f, i) => tone(f, f, .12, 'triangle', .1, i * .08)); },
+  angel: () => { [523, 659, 784, 1047, 1319, 1568].forEach((f, i) => tone(f, f, .5, 'sine', .05, i * .05)); },
+  life: () => { [784, 988, 1175, 1568, 1976, 2349].forEach((f, i) => tone(f, f * 1.01, .35, 'triangle', .08, i * .07)); whoosh(800, 4000, 2000, .6, .06, .1); },
+  ouch: () => { tone(700, 200, .25, 'square', .07); whoosh(1500, 600, 300, .2, .2); },
   milestone: () => { [784, 988, 1175, 1568].forEach((f, i) => tone(f, f, .1, 'square', .035, i * .06)); }
 };
 
@@ -625,6 +628,8 @@ const ENEMY_SKINS = [
 const P = { x: 150, y: GROUND, vy: 0, onGround: true, duckT: 0, duckHeld: false, spinT: 0, spinCd: 0, jumpBuf: 0, anim: 0 };
 const JUMP_V = -980, GRAV = 2450, SPIN_DUR = .48, DUCK_MIN = .42, BASE_SPEED = 440, MAX_SPEED = 1200;
 let state = 'menu', score = 0, best = 0, speed = 260, elapsed = 0, scroll = 0, gapLeft = 700;
+let lives = 0, invT = 0, angel = null, angelTimer = 12, momFx = null, lostFx = null;
+const MAX_LIVES = 3, MOM_DUR = 2.6;
 let obstacles = [], particles = [], popups = [], deathT = 0, shake = 0, nextMilestone = 500, flash = 0, hitsCount = 0;
 try { best = parseInt(localStorage.getItem('salsicha_best') || '0', 10) || 0; } catch (e) {}
 
@@ -632,6 +637,7 @@ function reset() {
   Object.assign(P, { y: GROUND, vy: 0, onGround: true, duckT: 0, duckHeld: false, spinT: 0, spinCd: 0, jumpBuf: 0 });
   score = 0; elapsed = 0; speed = BASE_SPEED; gapLeft = 650; obstacles = []; particles = []; popups = [];
   nextMilestone = 500; hitsCount = 0; deathT = 0;
+  lives = 0; invT = 0; angel = null; angelTimer = rnd(10, 16); momFx = null; lostFx = null;
 }
 function start() { reset(); state = 'play'; musicStart(); sfx.start(); }
 
@@ -713,6 +719,47 @@ function die(o) {
 
 function popup(x, y, text, color = '#fff') { popups.push({ x, y, text, color, life: 1 }); }
 
+function spawnAngel() {
+  angel = { x: W + 60, y: GROUND - 150, baseY: GROUND - 150, t: 0, state: 'fly', vx: 0 };
+  angelTimer = rnd(22, 34);
+  gapLeft = Math.max(gapLeft, speed * 1.4);
+  popup(W / 2, 150, 'UM ANJO! SALTA E BATE!', '#bff3ff');
+  sfx.angel();
+}
+function updateAngel(dt) {
+  const a = angel;
+  a.t += dt;
+  if (a.state === 'fly') {
+    a.x -= speed * .62 * dt;
+    a.y = a.baseY + Math.sin(a.t * 3.1) * 30 + Math.sin(a.t * 7.3) * 7;
+    if (Math.random() < dt * 20) particles.push({ x: a.x + rnd(-10, 20), y: a.y + rnd(-10, 20), vx: rnd(20, 80), vy: rnd(-20, 30), life: .6, max: .6, c: 'rgba(255,240,170,', s: rnd(1.5, 3) });
+    // tem de estar no ar E a bater
+    const dx = a.x - (P.x + 52), dy = a.y - (P.y - 28);
+    if (P.spinT > 0 && !P.onGround && dx > -80 && dx < 130 && Math.abs(dy) < 85) collectAngel();
+    else if (a.x < -80) angel = null;
+  } else {
+    a.y -= 280 * dt; a.x += 90 * dt;
+    if (a.y < -100) angel = null;
+  }
+}
+function collectAngel() {
+  angel.state = 'go';
+  lives = Math.min(MAX_LIVES, lives + 1);
+  momFx = { t: 0, slot: lives - 1 };
+  score += 250;
+  sfx.life();
+  popup(angel.x, angel.y - 40, '+1 VIDA  +250', '#ffd23f');
+  for (let i = 0; i < 26; i++) particles.push({ x: angel.x, y: angel.y, vx: rnd(-320, 320), vy: rnd(-380, 120), life: .9, max: .9, c: pick(['rgba(255,210,63,', 'rgba(255,255,255,', 'rgba(255,150,190,']), s: rnd(3, 6), star: Math.random() < .5 });
+}
+function loseLife(o) {
+  lives--; invT = 2;
+  lostFx = { t: 0, slot: lives };
+  if (momFx && momFx.slot >= lives) momFx = null;
+  shake = .25; flash = .12; sfx.ouch();
+  popup(P.x + 50, P.y - 90, '-1 VIDA', '#ff6b6b');
+  if (o.type === 'dog') { o.state = 'fly'; o.vx = 380; o.vy = -700; o.spinV = 12; }
+}
+
 function update(dt) {
   const tnow = performance.now() / 1000;
   P.anim += dt;
@@ -746,6 +793,14 @@ function update(dt) {
   // jogador
   if (P.duckT > 0) P.duckT -= dt;
   if (P.spinCd > 0) P.spinCd -= dt;
+  if (invT > 0) invT -= dt;
+  if (momFx && (momFx.t += dt) > MOM_DUR) momFx = null;
+  if (lostFx && (lostFx.t += dt) > .9) lostFx = null;
+  angelTimer -= dt;
+  if (!angel && angelTimer <= 0) {
+    if (lives < MAX_LIVES) spawnAngel(); else angelTimer = 8;
+  }
+  if (angel) updateAngel(dt);
   if (P.spinT > 0) {
     P.spinT -= dt;
     if (P.spinT <= 0) P.spinCd = .18;
@@ -799,7 +854,10 @@ function update(dt) {
       o.x -= speed * dt;
       if (!o.passed && o.x + o.w < P.x) { o.passed = true; sfx.pass(); }
     }
-    if (overlap(pb, boxOf(o))) { die(o); break; }
+    if (invT <= 0 && overlap(pb, boxOf(o))) {
+      if (lives > 0) loseLife(o);
+      else { die(o); break; }
+    }
   }
   obstacles = obstacles.filter(o => o.type === 'dog'
     ? (o.x + o.w > -150 && o.y < H + 200 && o.x < W + 600)
@@ -935,6 +993,160 @@ function drawEnemy(c, o) {
   }
 }
 
+function drawAngel(c, a) {
+  const x = a.x, y = a.y, t = a.t;
+  c.save();
+  c.translate(x, y); c.rotate(Math.sin(t * 3.1) * .12);
+  // brilho
+  const g = c.createRadialGradient(0, 0, 4, 0, 0, 62);
+  g.addColorStop(0, 'rgba(255,250,210,.75)'); g.addColorStop(1, 'rgba(255,250,210,0)');
+  c.fillStyle = g; c.beginPath(); c.arc(0, 0, 62, 0, TAU); c.fill();
+  // asas
+  const flap = Math.sin(t * 16) * .55;
+  for (const side of [-1, 1]) {
+    c.save(); c.translate(side * 6, -8); c.rotate(side * (-.5 - flap));
+    c.fillStyle = '#ffffff'; c.strokeStyle = '#cfe3f5'; c.lineWidth = 1.5;
+    c.beginPath(); c.ellipse(side * 18, -6, 20, 10, side * .4, 0, TAU); c.fill(); c.stroke();
+    c.beginPath(); c.ellipse(side * 14, 2, 14, 7, side * .7, 0, TAU); c.fill(); c.stroke();
+    c.restore();
+  }
+  // túnica
+  c.fillStyle = '#f4f9ff';
+  c.beginPath(); c.moveTo(-9, -6); c.lineTo(9, -6); c.lineTo(14, 18); c.lineTo(-14, 18); c.closePath(); c.fill();
+  c.strokeStyle = '#d6e6f5'; c.lineWidth = 1; c.stroke();
+  // cabeça
+  c.fillStyle = '#f7d9c4'; c.beginPath(); c.arc(0, -16, 10, 0, TAU); c.fill();
+  c.fillStyle = '#f2c94c';
+  for (const [hx, hy] of [[-7, -22], [-2, -25], [4, -24], [8, -20], [-9, -16]]) { c.beginPath(); c.arc(hx, hy, 4.2, 0, TAU); c.fill(); }
+  c.fillStyle = '#222'; c.beginPath(); c.arc(-3, -15, 1.4, 0, TAU); c.arc(4, -15, 1.4, 0, TAU); c.fill();
+  c.strokeStyle = '#c0392b'; c.lineWidth = 1.4; c.beginPath(); c.arc(0.5, -12, 3, .2, Math.PI - .2); c.stroke();
+  c.fillStyle = 'rgba(255,120,140,.5)'; c.beginPath(); c.arc(-6, -11, 2, 0, TAU); c.arc(7, -11, 2, 0, TAU); c.fill();
+  // auréola
+  c.strokeStyle = '#ffd23f'; c.lineWidth = 3;
+  c.beginPath(); c.ellipse(0, -33 + Math.sin(t * 6) * 1.5, 10, 3.5, 0, 0, TAU); c.stroke();
+  // caixa-presente
+  c.translate(0, 26);
+  c.fillStyle = '#e63946'; rr(c, -14, -10, 28, 22, 3); c.fill();
+  c.fillStyle = '#c92a37'; c.fillRect(-15, -13, 30, 6);
+  c.fillStyle = '#ffd23f'; c.fillRect(-3, -13, 6, 25); c.fillRect(-14, -1, 28, 4);
+  c.beginPath(); c.ellipse(-6, -15, 6, 4, -.5, 0, TAU); c.ellipse(6, -15, 6, 4, .5, 0, TAU); c.fill();
+  c.fillStyle = '#fff'; c.font = 'bold 12px system-ui'; c.textAlign = 'center'; c.textBaseline = 'middle';
+  c.fillText('?', 0, 4);
+  // braços a segurar
+  c.strokeStyle = '#f7d9c4'; c.lineWidth = 3; c.lineCap = 'round';
+  c.beginPath(); c.moveTo(-8, -30); c.lineTo(-13, -10); c.moveTo(8, -30); c.lineTo(13, -10); c.stroke();
+  c.restore();
+}
+
+// Mãe do Choco: mulher branca de cabelo liso
+const MOM = { skin: '#f9e0d0', skinShade: '#efc6b0', hair: '#6b4428', hairLight: '#8a5a37', top: '#e05d8a' };
+function drawMomHead(c, x, y, r) {
+  // cabelo de trás (comprido e liso)
+  c.fillStyle = MOM.hair;
+  c.beginPath();
+  c.moveTo(x - r * .95, y - r * .2);
+  c.arc(x, y - r * .2, r * .95, Math.PI, 0);
+  c.lineTo(x + r * 1.0, y + r * 1.35); c.lineTo(x - r * 1.0, y + r * 1.35); c.closePath(); c.fill();
+  // pescoço
+  c.fillStyle = MOM.skinShade; c.fillRect(x - r * .25, y + r * .6, r * .5, r * .55);
+  // cara
+  c.fillStyle = MOM.skin;
+  c.beginPath(); c.ellipse(x, y + r * .08, r * .72, r * .88, 0, 0, TAU); c.fill();
+  // orelhas e brincos
+  c.beginPath(); c.ellipse(x - r * .72, y + r * .12, r * .1, r * .16, 0, 0, TAU); c.ellipse(x + r * .72, y + r * .12, r * .1, r * .16, 0, 0, TAU); c.fill();
+  c.fillStyle = '#ffd23f'; c.beginPath(); c.arc(x - r * .73, y + r * .33, r * .06, 0, TAU); c.arc(x + r * .73, y + r * .33, r * .06, 0, TAU); c.fill();
+  // franja lisa e madeixas dos lados
+  c.fillStyle = MOM.hair;
+  c.beginPath();
+  c.moveTo(x - r * .8, y - r * .05);
+  c.quadraticCurveTo(x - r * .85, y - r * .92, x, y - r * .92);
+  c.quadraticCurveTo(x + r * .85, y - r * .92, x + r * .8, y - r * .05);
+  c.lineTo(x + r * .68, y - r * .32); c.lineTo(x - r * .68, y - r * .32); c.closePath(); c.fill();
+  c.fillRect(x - r * .9, y - r * .3, r * .22, r * 1.55);
+  c.fillRect(x + r * .68, y - r * .3, r * .22, r * 1.55);
+  c.strokeStyle = MOM.hairLight; c.lineWidth = Math.max(1, r * .04);
+  for (const dx of [-.45, -.15, .2, .5]) { c.beginPath(); c.moveTo(x + r * dx, y - r * .85); c.lineTo(x + r * dx * 1.05, y - r * .36); c.stroke(); }
+  // sobrancelhas
+  c.strokeStyle = '#5a3a22'; c.lineWidth = Math.max(1, r * .05); c.lineCap = 'round';
+  c.beginPath(); c.moveTo(x - r * .42, y - r * .18); c.quadraticCurveTo(x - r * .28, y - r * .25, x - r * .14, y - r * .18);
+  c.moveTo(x + r * .14, y - r * .18); c.quadraticCurveTo(x + r * .28, y - r * .25, x + r * .42, y - r * .18); c.stroke();
+  // olhos
+  c.fillStyle = '#fff';
+  c.beginPath(); c.ellipse(x - r * .28, y + r * .02, r * .13, r * .1, 0, 0, TAU); c.ellipse(x + r * .28, y + r * .02, r * .13, r * .1, 0, 0, TAU); c.fill();
+  c.fillStyle = '#3d6e9e';
+  c.beginPath(); c.arc(x - r * .27, y + r * .03, r * .075, 0, TAU); c.arc(x + r * .29, y + r * .03, r * .075, 0, TAU); c.fill();
+  c.fillStyle = '#111';
+  c.beginPath(); c.arc(x - r * .27, y + r * .03, r * .035, 0, TAU); c.arc(x + r * .29, y + r * .03, r * .035, 0, TAU); c.fill();
+  c.strokeStyle = '#222'; c.lineWidth = Math.max(1, r * .035);
+  c.beginPath(); c.moveTo(x - r * .43, y - r * .04); c.lineTo(x - r * .5, y - r * .1); c.moveTo(x + r * .43, y - r * .04); c.lineTo(x + r * .5, y - r * .1); c.stroke();
+  // nariz, bochechas, sorriso
+  c.strokeStyle = MOM.skinShade; c.lineWidth = Math.max(1, r * .04);
+  c.beginPath(); c.moveTo(x, y + r * .08); c.quadraticCurveTo(x - r * .06, y + r * .28, x + r * .04, y + r * .3); c.stroke();
+  c.fillStyle = 'rgba(240,110,130,.35)';
+  c.beginPath(); c.arc(x - r * .45, y + r * .32, r * .12, 0, TAU); c.arc(x + r * .45, y + r * .32, r * .12, 0, TAU); c.fill();
+  c.fillStyle = '#d64561';
+  c.beginPath(); c.moveTo(x - r * .24, y + r * .44); c.quadraticCurveTo(x, y + r * .66, x + r * .24, y + r * .44); c.quadraticCurveTo(x, y + r * .52, x - r * .24, y + r * .44); c.fill();
+}
+function drawMomIcon(c, x, y, r, alpha = 1) {
+  c.save(); c.globalAlpha = alpha;
+  c.fillStyle = '#ffe3ef'; c.beginPath(); c.arc(x, y, r, 0, TAU); c.fill();
+  c.save(); c.beginPath(); c.arc(x, y, r, 0, TAU); c.clip();
+  drawMomHead(c, x, y + r * .12, r * .78);
+  c.restore();
+  c.strokeStyle = '#ffd23f'; c.lineWidth = 3; c.beginPath(); c.arc(x, y, r, 0, TAU); c.stroke();
+  c.restore();
+}
+const slotPos = i => ({ x: W - 36 - i * 52, y: 38 });
+const easeOutBack = u => 1 + 2.7 * Math.pow(u - 1, 3) + 1.7 * Math.pow(u - 1, 2);
+function drawMomFx(c) {
+  const t = momFx.t, cx = W / 2, cy = 225;
+  if (t < 1.7) {
+    const s = t < .4 ? easeOutBack(t / .4) : 1;
+    const bob = Math.sin(t * 6) * 4;
+    c.save();
+    c.translate(cx, cy + bob); c.scale(s, s);
+    // raios de luz
+    c.save(); c.rotate(t * .8);
+    c.fillStyle = 'rgba(255,230,140,.35)';
+    for (let i = 0; i < 12; i++) { c.rotate(TAU / 12); c.beginPath(); c.moveTo(0, 0); c.lineTo(-14, -150); c.lineTo(14, -150); c.fill(); }
+    c.restore();
+    c.fillStyle = '#fff6fa'; c.beginPath(); c.arc(0, 0, 92, 0, TAU); c.fill();
+    c.save(); c.beginPath(); c.arc(0, 0, 92, 0, TAU); c.clip();
+    // ombros e blusa
+    c.fillStyle = MOM.top;
+    c.beginPath(); c.ellipse(0, 112, 78, 50, 0, 0, TAU); c.fill();
+    c.fillStyle = MOM.skin; c.beginPath(); c.moveTo(-18, 62); c.lineTo(18, 62); c.lineTo(0, 84); c.fill();
+    drawMomHead(c, 0, -2, 56);
+    // a acenar
+    const wave = Math.sin(t * 12) * .35;
+    c.save(); c.translate(55, 100); c.rotate(.25 + wave);
+    c.fillStyle = MOM.top; rr(c, -9, -50, 18, 50, 8); c.fill();
+    c.fillStyle = MOM.skin; c.beginPath(); c.arc(0, -56, 11, 0, TAU); c.fill();
+    c.restore();
+    c.restore();
+    c.strokeStyle = '#ffd23f'; c.lineWidth = 6; c.beginPath(); c.arc(0, 0, 92, 0, TAU); c.stroke();
+    c.restore();
+    c.globalAlpha = Math.min(1, t * 4);
+    txt(c, 'A MÃE DO CHOCO!', cx, cy + 122, 30, '#ffb3cf');
+    txt(c, '+1 VIDA', cx, cy + 154, 24, '#ffd23f');
+    c.globalAlpha = 1;
+    // corações
+    c.font = 'bold 22px system-ui'; c.textAlign = 'center';
+    for (let i = 0; i < 5; i++) {
+      const a = t * 2 + i * TAU / 5;
+      c.fillStyle = '#ff5c8a';
+      c.fillText('♥', cx + Math.cos(a) * 120 * s, cy + Math.sin(a) * 100 * s);
+    }
+  } else {
+    // a cara voa para o canto superior direito
+    const u = Math.min(1, (t - 1.7) / (MOM_DUR - 1.7));
+    const e = u * u * (3 - 2 * u);
+    const sp = slotPos(momFx.slot);
+    const x = cx + (sp.x - cx) * e, y = cy + (sp.y - cy) * e - Math.sin(e * Math.PI) * 60;
+    drawMomIcon(c, x, y, 92 + (20 - 92) * e);
+  }
+}
+
 function drawHero(c) {
   const duck = ducking();
   const cx = P.x + 52, cy = P.y - 26;
@@ -951,6 +1163,7 @@ function drawHero(c) {
   } else if (!P.onGround) {
     c.translate(cx, cy); c.rotate(Math.max(-.25, Math.min(.3, P.vy / 2500))); c.translate(-cx, -cy);
   }
+  if (invT > 0 && state === 'play' && Math.floor(performance.now() / 80) % 2 === 0) c.globalAlpha = .25;
   drawDog(c, P.x + 4, P.y, Object.assign({ t: P.anim, duck, still: !P.onGround || state === 'over', earFly: !P.onGround ? -.8 : 0 }, HERO));
   c.restore();
   if (spinning) drawWhirl(c, cx, cy - 2, 1 - P.spinT / SPIN_DUR);
@@ -999,6 +1212,7 @@ function draw() {
     else if (o.type === 'car') drawCar(c, o);
     else if (o.type === 'wall') drawWall(c, o);
   }
+  if (angel) drawAngel(c, angel);
   drawHero(c);
   for (const o of obstacles) if (o.type === 'dog') drawEnemy(c, o);
 
@@ -1011,11 +1225,21 @@ function draw() {
 
   if (flash > 0) { c.fillStyle = `rgba(255,255,255,${flash * 2})`; c.fillRect(0, 0, W, H); }
 
+  if (momFx && state === 'play') drawMomFx(c);
   // HUD
   if (state !== 'menu') {
     txt(c, String(Math.floor(score)).padStart(5, '0'), 24, 34, 34, '#fff', 'left');
     txt(c, 'RECORDE ' + best, 26, 70, 18, '#ffd23f', 'left', 800);
     txt(c, 'VELOCIDADE x' + (speed / BASE_SPEED).toFixed(1), 26, 96, 16, '#7be0d3', 'left', 800);
+    for (let i = 0; i < lives; i++) {
+      if (momFx && momFx.slot === i) continue;
+      const sp = slotPos(i);
+      drawMomIcon(c, sp.x, sp.y + Math.sin(t * 3 + i) * 2, 20);
+    }
+    if (lostFx) {
+      const sp = slotPos(lostFx.slot), u = lostFx.t / .9;
+      drawMomIcon(c, sp.x, sp.y + u * 30, 20 * (1 + u * .5), 1 - u);
+    }
   }
 
   if (state === 'menu') {
@@ -1025,11 +1249,12 @@ function draw() {
     const lines = [
       ['⬆ SALTAR', 'contentores de lixo e carros', '#7be0d3'],
       ['⬇ BAIXAR', 'passa pelos buracos dos muros', '#ffd08a'],
-      ['🌀 BATER', 'gira e faz os outros cães bazarem!', '#ff9aa2']
+      ['🌀 BATER', 'gira e faz os outros cães bazarem!', '#ff9aa2'],
+      ['👼 ANJO', 'salta + bate no anjo = vida extra!', '#bff3ff']
     ];
-    lines.forEach(([a, b, col], i) => { txt(c, a, W / 2 - 40, 222 + i * 40, 24, col, 'right', 900); txt(c, b, W / 2 - 24, 222 + i * 40, 22, '#fff', 'left', 600); });
-    if (Math.sin(t * 5) > -.3) txt(c, 'Carrega num botão para começar', W / 2, 360, 28, '#fff');
-    if (best > 0) txt(c, 'Recorde: ' + best, W / 2, 392, 20, '#ffd23f', 'center', 800);
+    lines.forEach(([a, b, col], i) => { txt(c, a, W / 2 - 40, 214 + i * 36, 24, col, 'right', 900); txt(c, b, W / 2 - 24, 214 + i * 36, 22, '#fff', 'left', 600); });
+    if (Math.sin(t * 5) > -.3) txt(c, 'Carrega num botão para começar', W / 2, 376, 28, '#fff');
+    if (best > 0) txt(c, 'Recorde: ' + best, W / 2, 408, 20, '#ffd23f', 'center', 800);
   } else if (state === 'over') {
     c.fillStyle = `rgba(20,14,40,${Math.min(.55, deathT)})`; c.fillRect(0, 0, W, H);
     if (deathT > .35) {
