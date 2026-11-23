@@ -113,6 +113,88 @@ const sfx = {
   milestone: () => { tone(660, 660, .08, 'square', .04); tone(880, 880, .12, 'square', .04, .09); }
 };
 
+/* ---------------- Música de fundo ----------------
+   Melodia alegre em Dó maior (C - G - Am - F), com instrumentos simples:
+   "xilofone" (triângulo + seno), baixo suave, bombo e pratinho.
+   O andamento acompanha a velocidade do jogo. */
+const _ = null;
+const MELODY = [
+  72, _, 76, _, 79, _, 76, 79,
+  79, _, 74, _, 71, _, 74, _,
+  76, _, 72, _, 69, _, 72, 76,
+  77, _, 76, _, 74, _, _, _,
+  72, 74, 76, 79, 84, _, 79, _,
+  83, _, 79, _, 74, _, 79, _,
+  81, 79, 77, 76, 77, _, 81, _,
+  79, _, 74, _, 79, 77, 76, 74
+];
+const ROOTS = [48, 43, 45, 41, 48, 43, 45, 43];
+const music = { on: false, step: 0, next: 0 };
+let noiseBuf = null;
+const mf = n => 440 * Math.pow(2, (n - 69) / 12);
+
+function mNote(freq, t, dur, type, vol) {
+  const o = actx.createOscillator(), g = actx.createGain();
+  o.type = type; o.frequency.setValueAtTime(freq, t);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(vol, t + 0.008);
+  g.gain.exponentialRampToValueAtTime(0.0008, t + dur);
+  o.connect(g).connect(actx.destination);
+  o.start(t); o.stop(t + dur + 0.02);
+}
+function mNoise(t, dur, vol, hp) {
+  if (!noiseBuf) {
+    noiseBuf = actx.createBuffer(1, actx.sampleRate * 0.3, actx.sampleRate);
+    const d = noiseBuf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  }
+  const s = actx.createBufferSource(), f = actx.createBiquadFilter(), g = actx.createGain();
+  s.buffer = noiseBuf; f.type = 'highpass'; f.frequency.value = hp;
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0008, t + dur);
+  s.connect(f).connect(g).connect(actx.destination);
+  s.start(t); s.stop(t + dur + 0.02);
+}
+function mKick(t) {
+  const o = actx.createOscillator(), g = actx.createGain();
+  o.frequency.setValueAtTime(160, t); o.frequency.exponentialRampToValueAtTime(45, t + 0.12);
+  g.gain.setValueAtTime(0.22, t); g.gain.exponentialRampToValueAtTime(0.0008, t + 0.15);
+  o.connect(g).connect(actx.destination); o.start(t); o.stop(t + 0.17);
+}
+function scheduleStep(i, t, sd) {
+  const bar = Math.floor(i / 8) % 8, beat = i % 8;
+  const n = MELODY[i % MELODY.length];
+  if (n !== null) {
+    mNote(mf(n), t, sd * 1.7, 'triangle', 0.09);
+    mNote(mf(n + 12), t, sd * 0.9, 'sine', 0.035);
+  }
+  const root = ROOTS[bar];
+  const bassPat = [0, _, 12, _, 7, _, 12, _][beat];
+  if (bassPat !== null) mNote(mf(root + bassPat), t, sd * 1.4, 'triangle', 0.11);
+  if (beat === 0 || beat === 4) mKick(t);
+  if (beat === 2 || beat === 6) mNoise(t, 0.09, 0.06, 1500);
+  mNoise(t, 0.03, 0.025, 7000);
+}
+function musicStart() {
+  if (!actx) return;
+  music.on = true; music.step = 0; music.next = actx.currentTime + 0.06;
+}
+function musicStop() { music.on = false; }
+setInterval(() => {
+  if (!music.on || !actx || actx.state !== 'running') return;
+  const bpm = 132 * Math.min(1.7, Math.max(1, speed / BASE_SPEED) ** 0.8);
+  const sd = 60 / bpm / 2;
+  if (music.next < actx.currentTime) music.next = actx.currentTime + 0.02;
+  while (music.next < actx.currentTime + 0.15) {
+    if (!muted) scheduleStep(music.step, music.next, sd);
+    music.step = (music.step + 1) % MELODY.length;
+    music.next += sd;
+  }
+}, 25);
+document.addEventListener('visibilitychange', () => {
+  if (!actx) return;
+  if (document.hidden) actx.suspend(); else actx.resume();
+});
+
 /* ---------------- Fundo: Maputo ---------------- */
 const BCOLS = ['#efe3c8', '#d9c7a6', '#f3d9b1', '#c7d6d4', '#e6b98d', '#f0e9dc', '#d7c2dd', '#bfd3e6', '#e8cf8f'];
 const midItems = []; let midLen = 0;
@@ -499,17 +581,17 @@ const ENEMY_SKINS = [
 
 /* ---------------- Estado do jogo ---------------- */
 const P = { x: 150, y: GROUND, vy: 0, onGround: true, duckT: 0, duckHeld: false, spinT: 0, spinCd: 0, jumpBuf: 0, anim: 0 };
-const JUMP_V = -980, GRAV = 2450, SPIN_DUR = .48, DUCK_MIN = .42;
+const JUMP_V = -980, GRAV = 2450, SPIN_DUR = .48, DUCK_MIN = .42, BASE_SPEED = 440, MAX_SPEED = 1200;
 let state = 'menu', score = 0, best = 0, speed = 260, elapsed = 0, scroll = 0, gapLeft = 700;
 let obstacles = [], particles = [], popups = [], deathT = 0, shake = 0, nextMilestone = 500, flash = 0, hitsCount = 0;
 try { best = parseInt(localStorage.getItem('salsicha_best') || '0', 10) || 0; } catch (e) {}
 
 function reset() {
   Object.assign(P, { y: GROUND, vy: 0, onGround: true, duckT: 0, duckHeld: false, spinT: 0, spinCd: 0, jumpBuf: 0 });
-  score = 0; elapsed = 0; speed = 440; gapLeft = 650; obstacles = []; particles = []; popups = [];
+  score = 0; elapsed = 0; speed = BASE_SPEED; gapLeft = 650; obstacles = []; particles = []; popups = [];
   nextMilestone = 500; hitsCount = 0; deathT = 0;
 }
-function start() { reset(); state = 'play'; }
+function start() { reset(); state = 'play'; musicStart(); }
 
 const ducking = () => P.onGround && (P.duckHeld || P.duckT > 0) && P.spinT <= 0;
 
@@ -581,7 +663,7 @@ function pBox() {
 const overlap = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
 
 function die(o) {
-  state = 'over'; deathT = 0; shake = .4; flash = .25; sfx.die();
+  state = 'over'; deathT = 0; shake = .4; flash = .25; sfx.die(); musicStop();
   P.vy = -620; P.onGround = false;
   canRestartAt = performance.now() + 700;
   if (Math.floor(score) > best) { best = Math.floor(score); try { localStorage.setItem('salsicha_best', String(best)); } catch (e) {} }
@@ -608,10 +690,16 @@ function update(dt) {
 
   // jogo
   elapsed += dt;
-  speed = Math.min(1080, 440 + elapsed * 9);
+  // quanto mais pontos, mais rápido
+  const target = Math.min(MAX_SPEED, BASE_SPEED + score * .14);
+  speed += (target - speed) * Math.min(1, dt * 2);
   scroll += speed * dt;
   score += speed * dt / 10;
-  if (score >= nextMilestone) { popup(W / 2, 120, Math.floor(nextMilestone) + ' pontos!', '#ffd23f'); sfx.milestone(); nextMilestone += 500; }
+  if (score >= nextMilestone) {
+    const fast = nextMilestone % 1000 === 0 && speed < MAX_SPEED - 5;
+    popup(W / 2, 120, Math.floor(nextMilestone) + ' pontos!' + (fast ? ' MAIS RÁPIDO!' : ''), '#ffd23f');
+    sfx.milestone(); nextMilestone += 500;
+  }
 
   // jogador
   if (P.duckT > 0) P.duckT -= dt;
@@ -882,6 +970,7 @@ function draw() {
   if (state !== 'menu') {
     txt(c, String(Math.floor(score)).padStart(5, '0'), 24, 34, 34, '#fff', 'left');
     txt(c, 'RECORDE ' + best, 26, 70, 18, '#ffd23f', 'left', 800);
+    txt(c, 'VELOCIDADE x' + (speed / BASE_SPEED).toFixed(1), 26, 96, 16, '#7be0d3', 'left', 800);
   }
 
   if (state === 'menu') {
